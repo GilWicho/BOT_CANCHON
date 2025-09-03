@@ -22,8 +22,8 @@ class BasicCommands(commands.Cog):
         if message.author == self.bot.user:
             return
         
-        # Responde a "hola" sin prefijo
-        if message.content.lower() == "hola":
+        # Responde a "hola" sin prefijo (si contiene "hola" en cualquier parte)
+        if "hola" in message.content.lower():
             await message.channel.send("sho")
         
         # Mensaje personalizado para usuario específico en canal específico
