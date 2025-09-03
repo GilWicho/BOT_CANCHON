@@ -1,19 +1,5 @@
 
 import os
-from dotenv import load_dotenv
-import discord
-from discord.ext import commands
-
-# Cargar variables de entorno desde .env
-load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
-
-intents = discord.Intents.default()
-intents.message_content = True  # Necesario para leer contenido de mensajes
-# Limitar cache de mensajes para ahorrar memoria en servidores pequeños
-bot = commands.Bot(command_prefix='!', intents=intents, max_messages=100)
-
-import os
 import asyncio
 from dotenv import load_dotenv
 import discord
@@ -25,7 +11,7 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 
 intents = discord.Intents.default()
 intents.message_content = True  # Necesario para leer contenido de mensajes
-# Asegurarse de usar una configuración baja de cache si se redefine
+# Limitar cache de mensajes para ahorrar memoria en servidores pequeños
 bot = commands.Bot(command_prefix='!', intents=intents, max_messages=100)
 
 @bot.event
