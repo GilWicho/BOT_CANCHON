@@ -2,16 +2,19 @@ import discord
 from discord.ext import commands
 import time
 import random
-from collections import defaultdict
+from collections import defaultdict, deque
 
 class BasicCommands(commands.Cog):
     """Comandos básicos del bot"""
     
     def __init__(self, bot):
         self.bot = bot
-        self.message_tracker = defaultdict(list)  # Almacena mensajes por usuario
+        # Almacena timestamps por usuario con tamaño limitado para ahorrar memoria
+        self.message_tracker = defaultdict(lambda: deque(maxlen=20))
         self.spam_limit = 5  # Mensajes límite
         self.time_window = 10  # Ventana de tiempo en segundos
+        # Límite de entradas de usuarios en el tracker para evitar crecimiento ilimitado
+        self.tracker_user_limit = 400
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -34,14 +37,24 @@ class BasicCommands(commands.Cog):
         current_time = time.time()
         user_id = message.author.id
         
-        # Agregar timestamp del mensaje actual
+        # Agregar timestamp del mensaje actual (deque con maxlen lo recorta automáticamente)
         self.message_tracker[user_id].append(current_time)
-        
+
         # Limpiar mensajes antiguos (fuera de la ventana de tiempo)
-        self.message_tracker[user_id] = [
-            timestamp for timestamp in self.message_tracker[user_id]
-            if current_time - timestamp <= self.time_window
-        ]
+        # Reemplazamos el deque por uno nuevo con los timestamps válidos
+        valid = [t for t in self.message_tracker[user_id] if current_time - t <= self.time_window]
+        self.message_tracker[user_id] = deque(valid, maxlen=20)
+
+        # Poda global simple si el dict crece demasiado
+        if len(self.message_tracker) > self.tracker_user_limit:
+            # eliminar usuarios cuyo deque esté vacío primero
+            keys = [k for k, v in self.message_tracker.items() if not v]
+            for k in keys[:50]:
+                del self.message_tracker[k]
+            # si aún es grande, eliminar entradas al azar (primeras n)
+            if len(self.message_tracker) > self.tracker_user_limit:
+                for k in list(self.message_tracker.keys())[:50]:
+                    del self.message_tracker[k]
         
         # Verificar si excede el límite de spam
         if len(self.message_tracker[user_id]) > self.spam_limit:
