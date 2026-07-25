@@ -1,0 +1,695 @@
+import asyncio
+import os
+from typing import cast
+
+import discord
+from discord.ext import commands
+import wavelink
+
+
+EMBED_COLOR = 0x1DB954
+URL_SCHEMES = ("http://", "https://", "spotify:")
+
+
+def format_duration(milliseconds: int) -> str:
+    if milliseconds <= 0:
+        return "En vivo"
+
+    total_seconds = milliseconds // 1000
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def track_label(track: wavelink.Playable) -> str:
+    title = discord.utils.escape_markdown(track.title)
+    author = discord.utils.escape_markdown(track.author)
+    if track.uri:
+        return f"[{title}]({track.uri}) — {author}"
+    return f"{title} — {author}"
+
+
+def queue_embed(player: wavelink.Player) -> discord.Embed:
+    embed = discord.Embed(title="Cola de reproducción", color=EMBED_COLOR)
+
+    if player.current:
+        embed.description = f"**Sonando:** {track_label(player.current)}"
+    else:
+        embed.description = "No hay una canción reproduciéndose."
+
+    queued = list(player.queue)
+    if not queued:
+        embed.add_field(name="Siguiente", value="La cola está vacía.", inline=False)
+    else:
+        lines = []
+        for index, track in enumerate(queued[:10], start=1):
+            lines.append(
+                f"`{index}.` {track_label(track)} "
+                f"`[{format_duration(track.length)}]`"
+            )
+        embed.add_field(name="Siguiente", value="\n".join(lines), inline=False)
+
+        remaining = len(queued) - 10
+        if remaining > 0:
+            embed.set_footer(text=f"Y {remaining} canción(es) más.")
+
+    mode_names = {
+        wavelink.QueueMode.normal: "Desactivado",
+        wavelink.QueueMode.loop: "Canción",
+        wavelink.QueueMode.loop_all: "Cola",
+    }
+    embed.add_field(
+        name="Repetición",
+        value=mode_names.get(player.queue.mode, "Desactivado"),
+        inline=True,
+    )
+    embed.add_field(name="Volumen", value=f"{player.volume}%", inline=True)
+    return embed
+
+
+def get_interaction_player(
+    interaction: discord.Interaction,
+) -> wavelink.Player | None:
+    if interaction.guild is None:
+        return None
+    player = interaction.guild.voice_client
+    return player if isinstance(player, wavelink.Player) else None
+
+
+class MusicControls(discord.ui.View):
+    """Controles persistentes para los mensajes de reproducción."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        player = get_interaction_player(interaction)
+        if player is None or player.channel is None:
+            await interaction.response.send_message(
+                "No hay un reproductor activo.", ephemeral=True
+            )
+            return False
+
+        voice = getattr(interaction.user, "voice", None)
+        if voice is None or voice.channel != player.channel:
+            await interaction.response.send_message(
+                "Debes estar en el mismo canal de voz que el bot.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(
+        label="Pausa",
+        emoji="⏯️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="music:pause_resume",
+    )
+    async def pause_resume(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        player = get_interaction_player(interaction)
+        if player is None or player.current is None:
+            await interaction.response.send_message(
+                "No hay una canción activa.", ephemeral=True
+            )
+            return
+
+        await player.pause(not player.paused)
+        state = "Pausado" if player.paused else "Reanudado"
+        await interaction.response.send_message(f"{state}.", ephemeral=True)
+
+    @discord.ui.button(
+        label="Saltar",
+        emoji="⏭️",
+        style=discord.ButtonStyle.primary,
+        custom_id="music:skip",
+    )
+    async def skip(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        player = get_interaction_player(interaction)
+        if player is None or player.current is None:
+            await interaction.response.send_message(
+                "No hay una canción activa.", ephemeral=True
+            )
+            return
+
+        await player.skip(force=True)
+        await interaction.response.send_message("Canción saltada.", ephemeral=True)
+
+    @discord.ui.button(
+        label="Mezclar",
+        emoji="🔀",
+        style=discord.ButtonStyle.secondary,
+        custom_id="music:shuffle",
+    )
+    async def shuffle(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        player = get_interaction_player(interaction)
+        if player is None or player.queue.count < 2:
+            await interaction.response.send_message(
+                "Se necesitan al menos dos canciones en la cola.",
+                ephemeral=True,
+            )
+            return
+
+        player.queue.shuffle()
+        await interaction.response.send_message("Cola mezclada.", ephemeral=True)
+
+    @discord.ui.button(
+        label="Cola",
+        emoji="📋",
+        style=discord.ButtonStyle.secondary,
+        custom_id="music:queue",
+    )
+    async def show_queue(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        player = get_interaction_player(interaction)
+        if player is None:
+            await interaction.response.send_message(
+                "No hay un reproductor activo.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            embed=queue_embed(player), ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="Detener",
+        emoji="⏹️",
+        style=discord.ButtonStyle.danger,
+        custom_id="music:stop",
+    )
+    async def stop(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        player = get_interaction_player(interaction)
+        if player is None:
+            await interaction.response.send_message(
+                "No hay un reproductor activo.", ephemeral=True
+            )
+            return
+
+        player.queue.clear()
+        cog = interaction.client.get_cog("MusicCommands")
+        if isinstance(cog, MusicCommands) and interaction.guild:
+            cog.home_channels.pop(interaction.guild.id, None)
+        await player.disconnect()
+        await interaction.response.send_message(
+            "Reproducción detenida y cola eliminada.", ephemeral=True
+        )
+
+
+class MusicCommands(commands.Cog):
+    """Reproductor de música mediante Lavalink y Wavelink."""
+
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
+        self.home_channels: dict[int, int] = {}
+        self.max_queue = max(10, int(os.getenv("MUSIC_MAX_QUEUE", "500")))
+        self.default_volume = min(
+            100, max(1, int(os.getenv("MUSIC_DEFAULT_VOLUME", "70")))
+        )
+
+    async def cog_load(self) -> None:
+        uri = os.getenv("LAVALINK_URI", "http://127.0.0.1:2333")
+        password = os.getenv("LAVALINK_PASSWORD")
+        if not password:
+            print("Lavalink no conectado: falta LAVALINK_PASSWORD en .env")
+            return
+
+        node = wavelink.Node(
+            identifier="principal",
+            uri=uri,
+            password=password,
+            retries=3,
+            resume_timeout=60,
+            inactive_player_timeout=180,
+            inactive_channel_tokens=2,
+        )
+
+        try:
+            await wavelink.Pool.connect(
+                nodes=[node],
+                client=self.bot,
+                cache_capacity=100,
+            )
+        except Exception as error:
+            print(f"No se pudo conectar con Lavalink en {uri}: {error}")
+
+        self.bot.add_view(MusicControls())
+
+    async def cog_unload(self) -> None:
+        await wavelink.Pool.close()
+
+    async def get_player(
+        self, ctx: commands.Context, *, connect: bool = False
+    ) -> wavelink.Player | None:
+        if ctx.guild is None:
+            return None
+
+        current = ctx.guild.voice_client
+        if isinstance(current, wavelink.Player):
+            author_voice = getattr(ctx.author, "voice", None)
+            if author_voice is None or author_voice.channel != current.channel:
+                await ctx.send("Debes estar en el mismo canal de voz que el bot.")
+                return None
+            self.home_channels[ctx.guild.id] = ctx.channel.id
+            return current
+
+        if not connect:
+            await ctx.send("No estoy conectado a un canal de voz.")
+            return None
+
+        author_voice = getattr(ctx.author, "voice", None)
+        if author_voice is None or author_voice.channel is None:
+            await ctx.send("Entra primero a un canal de voz.")
+            return None
+
+        try:
+            player = await author_voice.channel.connect(
+                cls=wavelink.Player,
+                self_deaf=True,
+            )
+        except wavelink.WavelinkException:
+            await ctx.send(
+                "Lavalink no está disponible. Inícialo con "
+                "`docker compose up -d lavalink`."
+            )
+            return None
+        except (discord.ClientException, TimeoutError):
+            await ctx.send("No pude entrar al canal de voz.")
+            return None
+
+        player = cast(wavelink.Player, player)
+        player.autoplay = wavelink.AutoPlayMode.partial
+        await player.set_volume(self.default_volume)
+        self.home_channels[ctx.guild.id] = ctx.channel.id
+        return player
+
+    async def search(
+        self, query: str
+    ) -> list[wavelink.Playable] | wavelink.Playlist:
+        query = query.strip()
+        is_url = query.lower().startswith(URL_SCHEMES)
+
+        if is_url:
+            return await asyncio.wait_for(
+                wavelink.Playable.search(query, source=None),
+                timeout=25,
+            )
+
+        if query.lower().startswith("yt:"):
+            youtube_query = query[3:].strip()
+            return await asyncio.wait_for(
+                wavelink.Playable.search(
+                    youtube_query,
+                    source=wavelink.TrackSource.YouTube,
+                ),
+                timeout=25,
+            )
+
+        try:
+            spotify_results = await asyncio.wait_for(
+                wavelink.Playable.search(query, source="spsearch"),
+                timeout=25,
+            )
+            if spotify_results:
+                return spotify_results
+        except (TimeoutError, wavelink.LavalinkLoadException):
+            pass
+
+        return await asyncio.wait_for(
+            wavelink.Playable.search(
+                query,
+                source=wavelink.TrackSource.YouTubeMusic,
+            ),
+            timeout=25,
+        )
+
+    def apply_requester(
+        self, tracks: list[wavelink.Playable], requester: discord.Member
+    ) -> None:
+        for track in tracks:
+            track.extras = {"requester_id": requester.id}
+
+    @commands.Cog.listener()
+    async def on_wavelink_node_ready(
+        self, payload: wavelink.NodeReadyEventPayload
+    ) -> None:
+        print(
+            f"Lavalink conectado: {payload.node.identifier} "
+            f"(reanudado={payload.resumed})"
+        )
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_start(
+        self, payload: wavelink.TrackStartEventPayload
+    ) -> None:
+        player = payload.player
+        if player is None or player.guild is None:
+            return
+
+        channel_id = self.home_channels.get(player.guild.id)
+        channel = self.bot.get_channel(channel_id) if channel_id else None
+        if not isinstance(channel, discord.abc.Messageable):
+            return
+
+        track = payload.track
+        embed = discord.Embed(
+            title="Ahora suena",
+            description=track_label(track),
+            color=EMBED_COLOR,
+        )
+        embed.add_field(
+            name="Duración",
+            value=format_duration(track.length),
+            inline=True,
+        )
+        embed.add_field(name="Fuente", value=track.source.title(), inline=True)
+        if track.artwork:
+            embed.set_thumbnail(url=track.artwork)
+
+        original = payload.original or track
+        requester_id = getattr(original.extras, "requester_id", None)
+        if requester_id:
+            requester = player.guild.get_member(requester_id)
+            if requester:
+                embed.set_footer(text=f"Pedido por {requester.display_name}")
+
+        await channel.send(embed=embed, view=MusicControls())
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_exception(
+        self, payload: wavelink.TrackExceptionEventPayload
+    ) -> None:
+        player = payload.player
+        if player is None or player.guild is None:
+            return
+
+        channel_id = self.home_channels.get(player.guild.id)
+        channel = self.bot.get_channel(channel_id) if channel_id else None
+        if isinstance(channel, discord.abc.Messageable):
+            await channel.send(
+                "No se pudo reproducir esa canción; intentaré continuar con la cola."
+            )
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_stuck(
+        self, payload: wavelink.TrackStuckEventPayload
+    ) -> None:
+        if payload.player:
+            await payload.player.skip(force=True)
+
+    @commands.Cog.listener()
+    async def on_wavelink_inactive_player(self, player: wavelink.Player) -> None:
+        guild_id = player.guild.id if player.guild else None
+        if guild_id:
+            channel_id = self.home_channels.pop(guild_id, None)
+            channel = self.bot.get_channel(channel_id) if channel_id else None
+            if isinstance(channel, discord.abc.Messageable):
+                await channel.send(
+                    "Me desconecté después de 3 minutos sin reproducir música."
+                )
+        await player.disconnect()
+
+    @commands.command(name="join", aliases=["conectar"])
+    @commands.guild_only()
+    async def join(self, ctx: commands.Context) -> None:
+        """Conecta el bot al canal de voz del usuario."""
+        player = await self.get_player(ctx, connect=True)
+        if player:
+            await ctx.send(f"Conectado a {player.channel.mention}.")
+
+    @commands.command(name="play", aliases=["p", "reproducir"])
+    @commands.guild_only()
+    @commands.cooldown(2, 5, commands.BucketType.guild)
+    async def play(self, ctx: commands.Context, *, query: str) -> None:
+        """Reproduce un enlace o busca una canción por nombre en Spotify."""
+        player = await self.get_player(ctx, connect=True)
+        if player is None:
+            return
+
+        if player.queue.count >= self.max_queue:
+            await ctx.send(f"La cola alcanzó el límite de {self.max_queue} canciones.")
+            return
+
+        async with ctx.typing():
+            try:
+                results = await self.search(query)
+            except TimeoutError:
+                await ctx.send("La búsqueda tardó demasiado. Intenta otra vez.")
+                return
+            except wavelink.LavalinkLoadException as error:
+                await ctx.send(f"No pude cargar esa música: `{error}`")
+                return
+
+        available = self.max_queue - player.queue.count
+
+        if isinstance(results, wavelink.Playlist):
+            selected = list(results.tracks[:available])
+            if not selected:
+                await ctx.send("La playlist no contiene canciones reproducibles.")
+                return
+
+            self.apply_requester(selected, ctx.author)
+            added = await player.queue.put_wait(selected)
+            truncated = len(results.tracks) > added
+            suffix = " (limitada por el tamaño máximo de la cola)" if truncated else ""
+            await ctx.send(
+                f"Playlist **{discord.utils.escape_markdown(results.name)}**: "
+                f"{added} canción(es) agregadas{suffix}."
+            )
+        else:
+            if not results:
+                await ctx.send("No encontré resultados para esa búsqueda.")
+                return
+
+            track = results[0]
+            self.apply_requester([track], ctx.author)
+            await player.queue.put_wait(track)
+            await ctx.send(f"Agregada a la cola: {track_label(track)}")
+
+        if player.current is None:
+            await player.play(
+                player.queue.get(),
+                volume=self.default_volume,
+            )
+
+    @play.error
+    async def play_error(
+        self, ctx: commands.Context, error: commands.CommandError
+    ) -> None:
+        if isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send(
+                f"Uso: `{ctx.clean_prefix}play <nombre o enlace>`\n"
+                f"Para buscar directamente en YouTube: "
+                f"`{ctx.clean_prefix}play yt:<nombre>`"
+            )
+            return
+        if isinstance(error, commands.CommandOnCooldown):
+            await ctx.send("Espera unos segundos antes de hacer otra búsqueda.")
+            return
+        raise error
+
+    @commands.command(name="pause", aliases=["pausa"])
+    @commands.guild_only()
+    async def pause(self, ctx: commands.Context) -> None:
+        player = await self.get_player(ctx)
+        if player is None or player.current is None:
+            return
+        if player.paused:
+            await ctx.send("La reproducción ya está pausada.")
+            return
+        await player.pause(True)
+        await ctx.send("Reproducción pausada.")
+
+    @commands.command(name="resume", aliases=["reanudar"])
+    @commands.guild_only()
+    async def resume(self, ctx: commands.Context) -> None:
+        player = await self.get_player(ctx)
+        if player is None or player.current is None:
+            return
+        if not player.paused:
+            await ctx.send("La reproducción no está pausada.")
+            return
+        await player.pause(False)
+        await ctx.send("Reproducción reanudada.")
+
+    @commands.command(name="skip", aliases=["s", "saltar"])
+    @commands.guild_only()
+    async def skip(self, ctx: commands.Context) -> None:
+        player = await self.get_player(ctx)
+        if player is None or player.current is None:
+            return
+        await player.skip(force=True)
+        await ctx.send("Canción saltada.")
+
+    @commands.command(name="stop", aliases=["leave", "disconnect", "salir"])
+    @commands.guild_only()
+    async def stop(self, ctx: commands.Context) -> None:
+        player = await self.get_player(ctx)
+        if player is None:
+            return
+        player.queue.clear()
+        self.home_channels.pop(ctx.guild.id, None)
+        await player.disconnect()
+        await ctx.send("Reproducción detenida, cola eliminada y bot desconectado.")
+
+    @commands.command(name="queue", aliases=["q", "cola"])
+    @commands.guild_only()
+    async def queue(self, ctx: commands.Context) -> None:
+        player = await self.get_player(ctx)
+        if player:
+            await ctx.send(embed=queue_embed(player))
+
+    @commands.command(name="nowplaying", aliases=["np", "sonando"])
+    @commands.guild_only()
+    async def now_playing(self, ctx: commands.Context) -> None:
+        player = await self.get_player(ctx)
+        if player is None or player.current is None:
+            await ctx.send("No hay una canción reproduciéndose.")
+            return
+
+        track = player.current
+        embed = discord.Embed(
+            title="Ahora suena",
+            description=track_label(track),
+            color=EMBED_COLOR,
+        )
+        embed.add_field(
+            name="Progreso",
+            value=(
+                f"{format_duration(player.position)} / "
+                f"{format_duration(track.length)}"
+            ),
+            inline=False,
+        )
+        if track.artwork:
+            embed.set_thumbnail(url=track.artwork)
+        await ctx.send(embed=embed, view=MusicControls())
+
+    @commands.command(name="remove", aliases=["quitar"])
+    @commands.guild_only()
+    async def remove(self, ctx: commands.Context, position: int) -> None:
+        player = await self.get_player(ctx)
+        if player is None:
+            return
+        if position < 1 or position > player.queue.count:
+            await ctx.send("Esa posición no existe en la cola.")
+            return
+
+        track = player.queue[position - 1]
+        del player.queue[position - 1]
+        await ctx.send(f"Eliminada: {track_label(track)}")
+
+    @commands.command(name="clear", aliases=["limpiar"])
+    @commands.guild_only()
+    async def clear(self, ctx: commands.Context) -> None:
+        player = await self.get_player(ctx)
+        if player is None:
+            return
+        player.queue.clear()
+        await ctx.send("Cola eliminada. La canción actual seguirá sonando.")
+
+    @commands.command(name="shuffle", aliases=["mezclar"])
+    @commands.guild_only()
+    async def shuffle(self, ctx: commands.Context) -> None:
+        player = await self.get_player(ctx)
+        if player is None:
+            return
+        if player.queue.count < 2:
+            await ctx.send("Se necesitan al menos dos canciones en la cola.")
+            return
+        player.queue.shuffle()
+        await ctx.send("Cola mezclada.")
+
+    @commands.command(name="move", aliases=["mover"])
+    @commands.guild_only()
+    async def move(
+        self, ctx: commands.Context, origin: int, destination: int
+    ) -> None:
+        player = await self.get_player(ctx)
+        if player is None:
+            return
+
+        size = player.queue.count
+        if not 1 <= origin <= size or not 1 <= destination <= size:
+            await ctx.send("Las posiciones indicadas no existen en la cola.")
+            return
+
+        track = player.queue[origin - 1]
+        del player.queue[origin - 1]
+        player.queue.put_at(destination - 1, track)
+        await ctx.send(
+            f"Movida **{discord.utils.escape_markdown(track.title)}** "
+            f"a la posición {destination}."
+        )
+
+    @commands.command(name="loop", aliases=["repeat", "repetir"])
+    @commands.guild_only()
+    async def loop(self, ctx: commands.Context, mode: str = "off") -> None:
+        player = await self.get_player(ctx)
+        if player is None:
+            return
+
+        modes = {
+            "off": wavelink.QueueMode.normal,
+            "no": wavelink.QueueMode.normal,
+            "song": wavelink.QueueMode.loop,
+            "cancion": wavelink.QueueMode.loop,
+            "canción": wavelink.QueueMode.loop,
+            "queue": wavelink.QueueMode.loop_all,
+            "cola": wavelink.QueueMode.loop_all,
+        }
+        selected = modes.get(mode.lower())
+        if selected is None:
+            await ctx.send(
+                f"Uso: `{ctx.clean_prefix}loop off|song|queue`"
+            )
+            return
+
+        player.queue.mode = selected
+        await ctx.send(f"Modo de repetición: **{mode.lower()}**.")
+
+    @commands.command(name="volume", aliases=["vol", "volumen"])
+    @commands.guild_only()
+    async def volume(self, ctx: commands.Context, value: int) -> None:
+        player = await self.get_player(ctx)
+        if player is None:
+            return
+        if not 0 <= value <= 100:
+            await ctx.send("El volumen debe estar entre 0 y 100.")
+            return
+        await player.set_volume(value)
+        await ctx.send(f"Volumen: {value}%.")
+
+    @commands.command(name="musichelp", aliases=["musica", "música"])
+    async def music_help(self, ctx: commands.Context) -> None:
+        prefix = ctx.clean_prefix
+        embed = discord.Embed(
+            title="Comandos de música",
+            description=(
+                f"`{prefix}play <nombre>` — busca primero en Spotify\n"
+                f"`{prefix}play <URL>` — acepta YouTube y Spotify\n"
+                f"`{prefix}play yt:<nombre>` — búsqueda directa en YouTube\n"
+                f"`{prefix}queue` — muestra la cola\n"
+                f"`{prefix}pause` / `{prefix}resume` / `{prefix}skip`\n"
+                f"`{prefix}shuffle` / `{prefix}remove <posición>`\n"
+                f"`{prefix}move <origen> <destino>` / `{prefix}clear`\n"
+                f"`{prefix}loop off|song|queue`\n"
+                f"`{prefix}volume <0-100>` / `{prefix}stop`"
+            ),
+            color=EMBED_COLOR,
+        )
+        await ctx.send(embed=embed)
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(MusicCommands(bot))
