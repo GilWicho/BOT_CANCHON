@@ -48,11 +48,16 @@ plugins:
     allowSearch: true
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
+
     clients:
       - MUSIC
+      - TV
       - ANDROID_VR
       - WEB
       - TVHTML5_SIMPLY
+
+    oauth:
+      enabled: true
 
 metrics:
   prometheus:
@@ -65,9 +70,8 @@ logging:
   level:
     root: INFO
     lavalink: DEBUG
-    lavalink.server.io.SocketContext: INFO
-    com.sedmelluq.discord.lavaplayer.tools.ExceptionTools: DEBUG
     dev.lavalink.youtube: DEBUG
+    dev.lavalink.youtube.http.YoutubeOauth2Handler: INFO
 
   request:
     enabled: true
