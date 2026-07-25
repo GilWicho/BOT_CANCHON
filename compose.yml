@@ -5,12 +5,10 @@ services:
     restart: unless-stopped
     environment:
       LAVALINK_SERVER_PASSWORD: "${LAVALINK_PASSWORD}"
-      SPOTIFY_CLIENT_ID: "${SPOTIFY_CLIENT_ID}"
-      SPOTIFY_CLIENT_SECRET: "${SPOTIFY_CLIENT_SECRET}"
       _JAVA_OPTIONS: "-Xms128m -Xmx768m -XX:+UseG1GC -XX:MaxGCPauseMillis=100"
     volumes:
       - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
-      - lavalink-plugins:/opt/Lavalink/plugins
+      - lavalink-youtube-plugin:/opt/Lavalink/plugins
     ports:
       - "127.0.0.1:2333:2333"
     cpus: 1.5
@@ -18,4 +16,4 @@ services:
     pids_limit: 256
 
 volumes:
-  lavalink-plugins:
+  lavalink-youtube-plugin:

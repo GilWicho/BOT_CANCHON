@@ -1,7 +1,6 @@
 # BOT CANCHÓN
 
-Bot de Discord con reproducción de música mediante Lavalink 4, búsquedas de
-Spotify y audio de YouTube.
+Bot de Discord con reproducción de música de YouTube mediante Lavalink 4.
 
 ## Configuración
 
@@ -19,29 +18,21 @@ Spotify y audio de YouTube.
 
    LAVALINK_URI=http://127.0.0.1:2333
    LAVALINK_PASSWORD=una_clave_larga_y_privada
-
-   SPOTIFY_CLIENT_ID=id_de_la_app_de_spotify
-   SPOTIFY_CLIENT_SECRET=secreto_de_la_app_de_spotify
    ```
 
    El `LAVALINK_PASSWORD` debe ser el mismo para el bot y el contenedor.
    Docker Compose transmite automáticamente estas variables a Lavalink.
 
-3. Crea una aplicación en
-   [Spotify for Developers](https://developer.spotify.com/dashboard) y copia
-   su Client ID y Client Secret. Spotify solo proporciona metadatos; LavaSrc
-   busca el audio correspondiente en YouTube.
-
-4. Inicia Lavalink:
+3. Inicia Lavalink:
 
    ```powershell
    docker compose up -d lavalink
    ```
 
-   La primera ejecución tarda un poco más porque descarga los plugins de
-   YouTube y LavaSrc.
+   La primera ejecución tarda un poco más porque descarga el plugin de
+   YouTube.
 
-5. Inicia el bot:
+4. Inicia el bot:
 
    ```powershell
    py main.py
@@ -61,10 +52,9 @@ docker compose down
 
 ## Uso
 
-- `!play nombre` busca primero en Spotify.
-- `!play URL` acepta canciones, álbumes y playlists de Spotify, además de
-  videos y playlists de YouTube.
-- `!play yt:nombre` fuerza una búsqueda de YouTube.
+- `!play nombre` busca en YouTube Music.
+- `!play URL` acepta videos y playlists de YouTube.
+- `!play yt:nombre` busca en YouTube normal.
 - `!queue`, `!nowplaying`, `!pause`, `!resume`, `!skip`, `!stop`.
 - `!shuffle`, `!remove 2`, `!move 5 1`, `!clear`.
 - `!loop off`, `!loop song`, `!loop queue`.

@@ -6,8 +6,6 @@ lavalink:
   plugins:
     - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.1"
       snapshot: false
-    - dependency: "com.github.topi314.lavasrc:lavasrc-plugin:4.8.3"
-      snapshot: false
 
   server:
     password: "${LAVALINK_SERVER_PASSWORD:change-this-password}"
@@ -55,39 +53,6 @@ plugins:
       - ANDROID_VR
       - WEB
       - TVHTML5_SIMPLY
-
-  lavasrc:
-    providers:
-      - 'ytsearch:"%ISRC%"'
-      - "ytsearch:%QUERY%"
-    sources:
-      spotify: true
-      applemusic: false
-      deezer: false
-      yandexmusic: false
-      flowerytts: false
-      youtube: false
-      vkmusic: false
-      tidal: false
-      qobuz: false
-      ytdlp: false
-      jiosaavn: false
-    lyrics-sources:
-      spotify: false
-      deezer: false
-      youtube: false
-      yandexmusic: false
-      vkmusic: false
-      lrcLib: false
-    spotify:
-      clientId: "${SPOTIFY_CLIENT_ID:}"
-      clientSecret: "${SPOTIFY_CLIENT_SECRET:}"
-      countryCode: "GT"
-      playlistLoadLimit: 5
-      albumLoadLimit: 4
-      resolveArtistsInSearch: false
-      localFiles: false
-      preferPartnerApi: false
 
 metrics:
   prometheus:

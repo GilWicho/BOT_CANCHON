@@ -7,8 +7,8 @@ from discord.ext import commands
 import wavelink
 
 
-EMBED_COLOR = 0x1DB954
-URL_SCHEMES = ("http://", "https://", "spotify:")
+EMBED_COLOR = 0xFF0033
+URL_SCHEMES = ("http://", "https://")
 
 
 def format_duration(milliseconds: int) -> str:
@@ -315,16 +315,6 @@ class MusicCommands(commands.Cog):
                 timeout=25,
             )
 
-        try:
-            spotify_results = await asyncio.wait_for(
-                wavelink.Playable.search(query, source="spsearch"),
-                timeout=25,
-            )
-            if spotify_results:
-                return spotify_results
-        except (TimeoutError, wavelink.LavalinkLoadException):
-            pass
-
         return await asyncio.wait_for(
             wavelink.Playable.search(
                 query,
@@ -431,7 +421,7 @@ class MusicCommands(commands.Cog):
     @commands.guild_only()
     @commands.cooldown(2, 5, commands.BucketType.guild)
     async def play(self, ctx: commands.Context, *, query: str) -> None:
-        """Reproduce un enlace o busca una canción por nombre en Spotify."""
+        """Reproduce un enlace o busca una canción por nombre en YouTube."""
         player = await self.get_player(ctx, connect=True)
         if player is None:
             return
@@ -676,9 +666,9 @@ class MusicCommands(commands.Cog):
         embed = discord.Embed(
             title="Comandos de música",
             description=(
-                f"`{prefix}play <nombre>` — busca primero en Spotify\n"
-                f"`{prefix}play <URL>` — acepta YouTube y Spotify\n"
-                f"`{prefix}play yt:<nombre>` — búsqueda directa en YouTube\n"
+                f"`{prefix}play <nombre>` — busca en YouTube Music\n"
+                f"`{prefix}play <URL>` — acepta YouTube y sus playlists\n"
+                f"`{prefix}play yt:<nombre>` — busca en YouTube normal\n"
                 f"`{prefix}queue` — muestra la cola\n"
                 f"`{prefix}pause` / `{prefix}resume` / `{prefix}skip`\n"
                 f"`{prefix}shuffle` / `{prefix}remove <posición>`\n"
