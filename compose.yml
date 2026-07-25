@@ -1,5 +1,6 @@
 services:
   lavalink:
+    restart: unless-stopped
     image: ghcr.io/lavalink-devs/lavalink:4.2.2-alpine
     container_name: canchon-lavalink
     restart: unless-stopped
