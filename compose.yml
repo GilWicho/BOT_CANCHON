@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     environment:
       LAVALINK_SERVER_PASSWORD: "${LAVALINK_PASSWORD}"
+      YOUTUBE_REFRESH_TOKEN: "${YOUTUBE_REFRESH_TOKEN}"
       _JAVA_OPTIONS: "-Xms128m -Xmx768m -XX:+UseG1GC -XX:MaxGCPauseMillis=100"
     volumes:
       - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
