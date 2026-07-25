@@ -60,6 +60,10 @@ plugins:
       enabled: true
       refreshToken: "${YOUTUBE_REFRESH_TOKEN}"
 
+    remoteCipher:
+      url: "https://cipher.kikkia.dev/"
+      userAgent: "CanchonBot"
+
 metrics:
   prometheus:
     enabled: false
