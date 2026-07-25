@@ -293,78 +293,6 @@ class MusicCommands(commands.Cog):
         self.home_channels[ctx.guild.id] = ctx.channel.id
         return player
 
-    # PLAY_MINIMAL_PATCH
-    async def play_minimal(
-        self,
-        player: wavelink.Player,
-        track: wavelink.Playable,
-    ) -> None:
-        """Reproduce usando el mismo PATCH mínimo que la prueba directa."""
-        if player.guild is None:
-            raise RuntimeError("El reproductor no tiene servidor asociado.")
-
-        old_current = player._current
-        old_original = player._original
-        old_previous = player._previous
-        old_volume = player._volume
-        old_paused = player._paused
-
-        # Mantener sincronizado el estado local de Wavelink.
-        player._current = track
-        player._original = track
-        player._previous = track
-        player.queue._loaded = track
-        player._volume = self.default_volume
-        player._paused = False
-
-        payload = {
-            "track": {
-                "encoded": track.encoded,
-                "userData": dict(track.extras),
-            },
-            "volume": self.default_volume,
-            "paused": False,
-        }
-
-        try:
-            await player.node._update_player(
-                player.guild.id,
-                data=payload,
-                replace=True,
-            )
-        except Exception:
-            player._current = old_current
-            player._original = old_original
-            player._previous = old_previous
-            player._volume = old_volume
-            player._paused = old_paused
-            raise
-
-        print(
-            f"[PLAY-MINIMAL] PATCH enviado: {track.title}",
-            flush=True,
-        )
-
-        # Confirmar que Lavalink mantuvo realmente la pista.
-        await asyncio.sleep(1)
-
-        remote = await player.node.fetch_player_info(player.guild.id)
-        remote_track = remote.track
-
-        print(
-            "[PLAY-MINIMAL] "
-            f"Track real después de 1 segundo: "
-            f"{remote_track.title if remote_track else None}",
-            flush=True,
-        )
-
-        if remote_track is None:
-            player._current = None
-            player._original = None
-            raise RuntimeError(
-                "Lavalink aceptó la canción, pero la eliminó inmediatamente."
-            )
-
     async def search(
         self, query: str
     ) -> list[wavelink.Playable] | wavelink.Playlist:
@@ -617,66 +545,20 @@ class MusicCommands(commands.Cog):
 
         available = self.max_queue - player.queue.count
 
-        # Consultar a Lavalink directamente, porque player.current puede
-        # quedar desincronizado cuando una pista falla o es iniciada por REST.
-        try:
-            remote_player = await player.node.fetch_player_info(ctx.guild.id)
-        except Exception as error:
-            print(
-                f"[PLAY] No pude consultar el estado real de Lavalink: {error}",
-                flush=True,
-            )
-            remote_player = None
-
-        remote_track = remote_player.track if remote_player else None
-        lavalink_is_playing = remote_track is not None
-
-        print(
-            "[PLAY] "
-            f"Track local: "
-            f"{player.current.title if player.current else None} | "
-            f"Track real: "
-            f"{remote_track.title if remote_track else None}",
-            flush=True,
-        )
-
         if isinstance(results, wavelink.Playlist):
             selected = list(results.tracks[:available])
-
             if not selected:
                 await ctx.send("La playlist no contiene canciones reproducibles.")
                 return
 
             self.apply_requester(selected, ctx.author)
-
-            if not lavalink_is_playing:
-                first_track = selected[0]
-                remaining_tracks = selected[1:]
-
-                await self.play_minimal(player, first_track)
-
-                if remaining_tracks:
-                    await player.queue.put_wait(remaining_tracks)
-
-                await ctx.send(
-                    f"Reproduciendo: {track_label(first_track)}\n"
-                    f"{len(remaining_tracks)} canción(es) quedaron en la cola."
-                )
-            else:
-                added = await player.queue.put_wait(selected)
-                truncated = len(results.tracks) > added
-                suffix = (
-                    " (limitada por el tamaño máximo de la cola)"
-                    if truncated
-                    else ""
-                )
-
-                await ctx.send(
-                    f"Playlist "
-                    f"**{discord.utils.escape_markdown(results.name)}**: "
-                    f"{added} canción(es) agregadas{suffix}."
-                )
-
+            added = await player.queue.put_wait(selected)
+            truncated = len(results.tracks) > added
+            suffix = " (limitada por el tamaño máximo de la cola)" if truncated else ""
+            await ctx.send(
+                f"Playlist **{discord.utils.escape_markdown(results.name)}**: "
+                f"{added} canción(es) agregadas{suffix}."
+            )
         else:
             if not results:
                 await ctx.send("No encontré resultados para esa búsqueda.")
@@ -684,14 +566,14 @@ class MusicCommands(commands.Cog):
 
             track = results[0]
             self.apply_requester([track], ctx.author)
+            await player.queue.put_wait(track)
+            await ctx.send(f"Agregada a la cola: {track_label(track)}")
 
-            if not lavalink_is_playing:
-                await self.play_minimal(player, track)
-
-                await ctx.send(f"Reproduciendo: {track_label(track)}")
-            else:
-                await player.queue.put_wait(track)
-                await ctx.send(f"Agregada a la cola: {track_label(track)}")
+        if player.current is None:
+            await player.play(
+                player.queue.get(),
+                volume=self.default_volume,
+            )
 
     @play.error
     async def play_error(
