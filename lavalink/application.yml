@@ -58,6 +58,7 @@ plugins:
 
     oauth:
       enabled: true
+      refreshToken: "${YOUTUBE_REFRESH_TOKEN}"
 
 metrics:
   prometheus:
