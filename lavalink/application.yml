@@ -4,8 +4,8 @@ server:
 
 lavalink:
   plugins:
-    - dependency: "dev.lavalink.youtube:youtube-plugin:07180c1f8f006b57bcda356c8238cf66d88b06a3-SNAPSHOT"
-      snapshot: true
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.1"
+      snapshot: false
 
   server:
     password: "${LAVALINK_SERVER_PASSWORD:change-this-password}"
