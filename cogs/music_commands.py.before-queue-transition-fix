@@ -111,40 +111,15 @@ class MusicControls(discord.ui.View):
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
         player = get_interaction_player(interaction)
-        if player is None:
+        if player is None or player.current is None:
             await interaction.response.send_message(
-                "No hay un reproductor activo.",
-                ephemeral=True,
+                "No hay una canción activa.", ephemeral=True
             )
             return
 
-        cog = interaction.client.get_cog("MusicCommands")
-
-        if not isinstance(cog, MusicCommands):
-            await interaction.response.send_message(
-                "El módulo de música no está disponible.",
-                ephemeral=True,
-            )
-            return
-
-        target_paused = not player.paused
-        changed = await cog.request_pause(
-            player,
-            target_paused,
-        )
-
-        if not changed:
-            await interaction.response.send_message(
-                "No hay una canción activa.",
-                ephemeral=True,
-            )
-            return
-
-        state = "Pausado" if target_paused else "Reanudado"
-        await interaction.response.send_message(
-            f"{state}.",
-            ephemeral=True,
-        )
+        await player.pause(not player.paused)
+        state = "Pausado" if player.paused else "Reanudado"
+        await interaction.response.send_message(f"{state}.", ephemeral=True)
 
     @discord.ui.button(
         label="Saltar",
@@ -156,35 +131,14 @@ class MusicControls(discord.ui.View):
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
         player = get_interaction_player(interaction)
-        if player is None:
+        if player is None or player.current is None:
             await interaction.response.send_message(
-                "No hay un reproductor activo.",
-                ephemeral=True,
+                "No hay una canción activa.", ephemeral=True
             )
             return
 
-        cog = interaction.client.get_cog("MusicCommands")
-
-        if not isinstance(cog, MusicCommands):
-            await interaction.response.send_message(
-                "El módulo de música no está disponible.",
-                ephemeral=True,
-            )
-            return
-
-        skipped = await cog.request_skip(player)
-
-        if not skipped:
-            await interaction.response.send_message(
-                "No hay una canción activa.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.send_message(
-            "Canción saltada.",
-            ephemeral=True,
-        )
+        await player.skip(force=True)
+        await interaction.response.send_message("Canción saltada.", ephemeral=True)
 
     @discord.ui.button(
         label="Mezclar",
@@ -262,7 +216,6 @@ class MusicCommands(commands.Cog):
         self.default_volume = min(
             100, max(1, int(os.getenv("MUSIC_DEFAULT_VOLUME", "70")))
         )
-        self.transition_locks: dict[int, asyncio.Lock] = {}
 
     async def cog_load(self) -> None:
         uri = os.getenv("LAVALINK_URI", "http://127.0.0.1:2333")
@@ -335,126 +288,34 @@ class MusicCommands(commands.Cog):
             return None
 
         player = cast(wavelink.Player, player)
-        player.autoplay = wavelink.AutoPlayMode.disabled
+        player.autoplay = wavelink.AutoPlayMode.partial
         await player.set_volume(self.default_volume)
         self.home_channels[ctx.guild.id] = ctx.channel.id
         return player
 
-    # Reproducción y transiciones personalizadas.
-    def get_transition_lock(
-        self,
-        player: wavelink.Player,
-    ) -> asyncio.Lock:
-        if player.guild is None:
-            raise RuntimeError(
-                "El reproductor no tiene servidor asociado."
-            )
-
-        return self.transition_locks.setdefault(
-            player.guild.id,
-            asyncio.Lock(),
-        )
-
-    async def fetch_remote_track(
-        self,
-        player: wavelink.Player,
-    ) -> wavelink.Playable | None:
-        """Consulta la pista que Lavalink realmente tiene activa."""
-        if player.guild is None:
-            return None
-
-        try:
-            remote = await player.node.fetch_player_info(
-                player.guild.id
-            )
-            return remote.track
-        except Exception as error:
-            print(
-                "[PLAYER] No pude consultar el estado real: "
-                f"{error!r}",
-                flush=True,
-            )
-
-            # Solo se usa como respaldo cuando falla la consulta.
-            return player.current
-
-    async def request_pause(
-        self,
-        player: wavelink.Player,
-        paused: bool,
-    ) -> bool:
-        """Pausa o reanuda únicamente cuando hay una pista real."""
-        lock = self.get_transition_lock(player)
-
-        async with lock:
-            remote_track = await self.fetch_remote_track(player)
-
-            if remote_track is None:
-                player._current = None
-                player._original = None
-                player._paused = False
-                return False
-
-            await player.pause(paused)
-            return True
-
-    async def request_skip(
-        self,
-        player: wavelink.Player,
-    ) -> bool:
-        """Detiene la pista actual; TrackEnd iniciará la siguiente."""
-        lock = self.get_transition_lock(player)
-
-        async with lock:
-            remote_track = await self.fetch_remote_track(player)
-
-            if remote_track is None:
-                player._current = None
-                player._original = None
-                player.queue._loaded = None
-                return False
-
-            # force=True elimina la pista cargada para evitar que
-            # el modo loop vuelva a reproducir la misma al saltarla.
-            await player.skip(force=True)
-            return True
-
+    # PLAY_MINIMAL_PATCH
     async def play_minimal(
         self,
         player: wavelink.Player,
         track: wavelink.Playable,
     ) -> None:
-        """Reproduce con el PATCH mínimo que funciona en este servidor."""
+        """Reproduce usando el mismo PATCH mínimo que la prueba directa."""
         if player.guild is None:
-            raise RuntimeError(
-                "El reproductor no tiene servidor asociado."
-            )
+            raise RuntimeError("El reproductor no tiene servidor asociado.")
 
         old_current = player._current
         old_original = player._original
         old_previous = player._previous
         old_volume = player._volume
         old_paused = player._paused
-        old_loaded = player.queue._loaded
 
-        # Sincronizar el estado local antes de enviar la pista.
-        player._previous = (
-            old_current
-            if old_current is not None
-            else old_previous
-        )
+        # Mantener sincronizado el estado local de Wavelink.
         player._current = track
         player._original = track
+        player._previous = track
         player.queue._loaded = track
         player._volume = self.default_volume
         player._paused = False
-
-        # Reiniciar el progreso local cuando sea posible.
-        if hasattr(player, "_last_position"):
-            player._last_position = 0
-
-        if hasattr(player, "_last_update"):
-            player._last_update = None
 
         payload = {
             "track": {
@@ -477,7 +338,6 @@ class MusicCommands(commands.Cog):
             player._previous = old_previous
             player._volume = old_volume
             player._paused = old_paused
-            player.queue._loaded = old_loaded
             raise
 
         print(
@@ -485,14 +345,15 @@ class MusicCommands(commands.Cog):
             flush=True,
         )
 
-        # Lavalink puede aceptar el PATCH y eliminar la pista
-        # unos milisegundos después, por eso se confirma.
+        # Confirmar que Lavalink mantuvo realmente la pista.
         await asyncio.sleep(1)
 
-        remote_track = await self.fetch_remote_track(player)
+        remote = await player.node.fetch_player_info(player.guild.id)
+        remote_track = remote.track
 
         print(
-            "[PLAY-MINIMAL] Pista real después de 1 segundo: "
+            "[PLAY-MINIMAL] "
+            f"Track real después de 1 segundo: "
             f"{remote_track.title if remote_track else None}",
             flush=True,
         )
@@ -500,113 +361,9 @@ class MusicCommands(commands.Cog):
         if remote_track is None:
             player._current = None
             player._original = None
-            player.queue._loaded = None
-
             raise RuntimeError(
-                "Lavalink aceptó la canción, pero no mantuvo "
-                "la reproducción."
+                "Lavalink aceptó la canción, pero la eliminó inmediatamente."
             )
-
-        # Mantener el historial permite que loop queue funcione.
-        history = player.queue.history
-
-        if history is not None:
-            add_to_history = True
-
-            # En loop song no debemos llenar el historial con
-            # copias infinitas de la misma canción.
-            if player.queue.mode is wavelink.QueueMode.loop and history:
-                last_track = history[-1]
-                add_to_history = (
-                    last_track.encoded != track.encoded
-                )
-
-            if add_to_history:
-                history.put(track)
-
-    async def advance_queue(
-        self,
-        player: wavelink.Player,
-        *,
-        reason: str,
-    ) -> wavelink.Playable | None:
-        """Selecciona y reproduce la siguiente canción de forma segura."""
-        if player.guild is None:
-            return None
-
-        lock = self.get_transition_lock(player)
-
-        async with lock:
-            if not player.connected or player.channel is None:
-                return None
-
-            # Una pista fallida o saltada nunca debe repetirse
-            # aunque el modo loop song esté activo.
-            if reason in {"stopped", "loadFailed", "cleanup"}:
-                player.queue._loaded = None
-
-            player._current = None
-            player._original = None
-            player._paused = False
-
-            try:
-                next_track = player.queue.get()
-            except wavelink.QueueEmpty:
-                player.queue._loaded = None
-
-                channel_id = self.home_channels.get(
-                    player.guild.id
-                )
-                channel = (
-                    self.bot.get_channel(channel_id)
-                    if channel_id
-                    else None
-                )
-
-                if isinstance(channel, discord.abc.Messageable):
-                    await channel.send(
-                        "La cola terminó; no quedan más canciones."
-                    )
-
-                print(
-                    f"[QUEUE] Cola finalizada. Razón: {reason}",
-                    flush=True,
-                )
-                return None
-
-            try:
-                await self.play_minimal(player, next_track)
-            except Exception as error:
-                print(
-                    "[QUEUE] No pude iniciar la siguiente canción: "
-                    f"{error!r}",
-                    flush=True,
-                )
-
-                channel_id = self.home_channels.get(
-                    player.guild.id
-                )
-                channel = (
-                    self.bot.get_channel(channel_id)
-                    if channel_id
-                    else None
-                )
-
-                if isinstance(channel, discord.abc.Messageable):
-                    await channel.send(
-                        "No pude iniciar la siguiente canción. "
-                        "La pista permanece detenida."
-                    )
-
-                return None
-
-            print(
-                "[QUEUE] Siguiente canción iniciada: "
-                f"{next_track.title}",
-                flush=True,
-            )
-
-            return next_track
 
     async def search(
         self, query: str
@@ -727,47 +484,11 @@ class MusicCommands(commands.Cog):
             )
 
     @commands.Cog.listener()
-    async def on_wavelink_track_end(
-        self,
-        payload: wavelink.TrackEndEventPayload,
-    ) -> None:
-        player = payload.player
-
-        if player is None or player.guild is None:
-            return
-
-        reason = str(payload.reason)
-
-        print(
-            "\n=========== TRACK END ===========\n"
-            f"Canción: {payload.track.title}\n"
-            f"Razón: {reason}\n"
-            "=================================\n",
-            flush=True,
-        )
-
-        # Replaced indica que otra pista ya tomó su lugar.
-        if reason == "replaced":
-            return
-
-        await self.advance_queue(
-            player,
-            reason=reason,
-        )
-
-    @commands.Cog.listener()
     async def on_wavelink_track_stuck(
         self, payload: wavelink.TrackStuckEventPayload
     ) -> None:
-        if payload.player is None:
-            return
-
-        print(
-            f"[TRACK-STUCK] {payload.track.title}",
-            flush=True,
-        )
-
-        await self.request_skip(payload.player)
+        if payload.player:
+            await payload.player.skip(force=True)
 
     @commands.Cog.listener()
     async def on_wavelink_inactive_player(self, player: wavelink.Player) -> None:
@@ -781,6 +502,87 @@ class MusicCommands(commands.Cog):
                 )
         await player.disconnect()
 
+
+    # DEBUG_WAVELINK_EVENTS
+    @commands.Cog.listener("on_wavelink_track_start")
+    async def debug_track_start(self, payload) -> None:
+        track = getattr(payload, "track", None)
+        title = getattr(track, "title", "Sin título")
+
+        print(
+            "\n========== TRACK START ==========\n"
+            f"Canción: {title}\n"
+            "=================================\n",
+            flush=True,
+        )
+
+    @commands.Cog.listener("on_wavelink_track_end")
+    async def debug_track_end(self, payload) -> None:
+        track = getattr(payload, "track", None)
+        title = getattr(track, "title", "Sin título")
+        reason = getattr(payload, "reason", "Sin razón")
+
+        print(
+            "\n=========== TRACK END ===========\n"
+            f"Canción: {title}\n"
+            f"Razón: {reason!r}\n"
+            "=================================\n",
+            flush=True,
+        )
+
+    @commands.Cog.listener("on_wavelink_track_exception")
+    async def debug_track_exception(self, payload) -> None:
+        track = getattr(payload, "track", None)
+        title = getattr(track, "title", "Sin título")
+        exception = getattr(payload, "exception", None)
+
+        print(
+            "\n======== TRACK EXCEPTION ========\n"
+            f"Canción: {title}\n"
+            f"Excepción: {exception!r}\n",
+            flush=True,
+        )
+
+        if isinstance(exception, dict):
+            print(
+                f"Severidad: {exception.get('severity')}\n"
+                f"Causa: {exception.get('cause')}\n"
+                f"Mensaje: {exception.get('message')}\n"
+                f"Traza: {exception.get('causeStackTrace')}\n",
+                flush=True,
+            )
+        elif exception is not None:
+            for name in ("severity", "cause", "message", "cause_stack_trace"):
+                value = getattr(exception, name, None)
+                if value is not None:
+                    print(f"{name}: {value}", flush=True)
+
+        print("=================================\n", flush=True)
+
+    @commands.Cog.listener("on_wavelink_track_stuck")
+    async def debug_track_stuck(self, payload) -> None:
+        track = getattr(payload, "track", None)
+        title = getattr(track, "title", "Sin título")
+        threshold = getattr(payload, "threshold", None)
+
+        print(
+            "\n========== TRACK STUCK ==========\n"
+            f"Canción: {title}\n"
+            f"Umbral: {threshold}\n"
+            "=================================\n",
+            flush=True,
+        )
+
+    @commands.Cog.listener("on_wavelink_websocket_closed")
+    async def debug_voice_websocket_closed(self, payload) -> None:
+        print(
+            "\n====== VOICE WEBSOCKET CLOSED ===\n"
+            f"Código: {getattr(payload, 'code', None)}\n"
+            f"Razón: {getattr(payload, 'reason', None)}\n"
+            f"Remoto: {getattr(payload, 'by_remote', None)}\n"
+            "=================================\n",
+            flush=True,
+        )
 
     @commands.command(name="join", aliases=["conectar"])
     @commands.guild_only()
@@ -851,22 +653,7 @@ class MusicCommands(commands.Cog):
                 first_track = selected[0]
                 remaining_tracks = selected[1:]
 
-                try:
-                    await self.play_minimal(
-                        player,
-                        first_track,
-                    )
-                except Exception as error:
-                    print(
-                        "[PLAY] Error iniciando playlist: "
-                        f"{error!r}",
-                        flush=True,
-                    )
-                    await ctx.send(
-                        "Encontré la playlist, pero no pude "
-                        "iniciar su primera canción."
-                    )
-                    return
+                await self.play_minimal(player, first_track)
 
                 if remaining_tracks:
                     await player.queue.put_wait(remaining_tracks)
@@ -899,26 +686,9 @@ class MusicCommands(commands.Cog):
             self.apply_requester([track], ctx.author)
 
             if not lavalink_is_playing:
-                try:
-                    await self.play_minimal(
-                        player,
-                        track,
-                    )
-                except Exception as error:
-                    print(
-                        "[PLAY] Error iniciando canción: "
-                        f"{error!r}",
-                        flush=True,
-                    )
-                    await ctx.send(
-                        "Encontré la canción, pero no pude "
-                        "iniciar su audio."
-                    )
-                    return
+                await self.play_minimal(player, track)
 
-                await ctx.send(
-                    f"Reproduciendo: {track_label(track)}"
-                )
+                await ctx.send(f"Reproduciendo: {track_label(track)}")
             else:
                 await player.queue.put_wait(track)
                 await ctx.send(f"Agregada a la cola: {track_label(track)}")
@@ -943,79 +713,33 @@ class MusicCommands(commands.Cog):
     @commands.guild_only()
     async def pause(self, ctx: commands.Context) -> None:
         player = await self.get_player(ctx)
-
-        if player is None:
+        if player is None or player.current is None:
             return
-
         if player.paused:
-            await ctx.send(
-                "La reproducción ya está pausada."
-            )
+            await ctx.send("La reproducción ya está pausada.")
             return
-
-        changed = await self.request_pause(
-            player,
-            True,
-        )
-
-        if not changed:
-            await ctx.send(
-                "No hay una canción reproduciéndose."
-            )
-            return
-
+        await player.pause(True)
         await ctx.send("Reproducción pausada.")
 
     @commands.command(name="resume", aliases=["reanudar"])
     @commands.guild_only()
     async def resume(self, ctx: commands.Context) -> None:
         player = await self.get_player(ctx)
-
-        if player is None:
+        if player is None or player.current is None:
             return
-
         if not player.paused:
-            remote_track = await self.fetch_remote_track(player)
-
-            if remote_track is None:
-                await ctx.send(
-                    "No hay una canción reproduciéndose."
-                )
-            else:
-                await ctx.send(
-                    "La reproducción no está pausada."
-                )
+            await ctx.send("La reproducción no está pausada.")
             return
-
-        changed = await self.request_pause(
-            player,
-            False,
-        )
-
-        if not changed:
-            await ctx.send(
-                "No hay una canción reproduciéndose."
-            )
-            return
-
+        await player.pause(False)
         await ctx.send("Reproducción reanudada.")
 
     @commands.command(name="skip", aliases=["s", "saltar"])
     @commands.guild_only()
     async def skip(self, ctx: commands.Context) -> None:
         player = await self.get_player(ctx)
-
-        if player is None:
+        if player is None or player.current is None:
             return
-
-        skipped = await self.request_skip(player)
-
-        if not skipped:
-            await ctx.send(
-                "No hay una canción reproduciéndose."
-            )
-            return
-
+        await player.skip(force=True)
         await ctx.send("Canción saltada.")
 
     @commands.command(name="stop", aliases=["leave", "disconnect", "salir"])
