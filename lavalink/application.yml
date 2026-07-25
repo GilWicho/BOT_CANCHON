@@ -64,4 +64,14 @@ sentry:
 logging:
   level:
     root: INFO
-    lavalink: INFO
+    lavalink: DEBUG
+    lavalink.server.io.SocketContext: INFO
+    com.sedmelluq.discord.lavaplayer.tools.ExceptionTools: DEBUG
+    dev.lavalink.youtube: DEBUG
+
+  request:
+    enabled: true
+    includeClientInfo: true
+    includeHeaders: false
+    includeQueryString: true
+    includePayload: true
