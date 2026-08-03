@@ -4,7 +4,7 @@ server:
 
 lavalink:
   plugins:
-    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.2"
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.1"
       snapshot: false
 
   server:
@@ -52,8 +52,9 @@ plugins:
     clients:
       - MUSIC
       - TV
+      - ANDROID_VR
       - WEB
-      - WEBEMBEDDED
+      - TVHTML5_SIMPLY
 
     oauth:
       enabled: true
