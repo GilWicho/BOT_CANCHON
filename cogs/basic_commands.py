@@ -33,9 +33,9 @@ class BasicCommands(commands.Cog):
             if random.randint(1, 100) <= 25:
                 await message.channel.send("sho mixqueño cerote")
         
-        # Nueva: 5% de probabilidad de responder "Shooo" a cualquier mensaje
-        if random.randint(1, 100) <= 5:
-            await message.channel.send("Shooo")
+        # Desactivado temporalmente: respuesta aleatoria "Shooo" (5%).
+        # if random.randint(1, 100) <= 5:
+        #     await message.channel.send("Shooo")
         
         # Sistema anti-spam para todos los usuarios
         current_time = time.time()
